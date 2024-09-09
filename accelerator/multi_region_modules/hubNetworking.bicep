@@ -32,11 +32,10 @@ type lockType = {
 @sys.description('The Azure Region to deploy the resources into.')
 param parLocation string = resourceGroup().location
 
+param parSecondaryLocation string?
+
 @sys.description('Prefix value which will be prepended to all resource names.')
 param parCompanyPrefix string = 'alz'
-
-@sys.description('Name for Hub Network.')
-param parHubNetworkName string = '${parCompanyPrefix}-hub-${parLocation}'
 
 @sys.description('''Global Resource Lock Configuration used for all resources deployed in this module.
 
@@ -52,6 +51,9 @@ param parGlobalResourceLock lockType = {
 
 @sys.description('The IP address range for Hub Network.')
 param parHubNetworkAddressPrefix string = '10.10.0.0/16'
+
+@sys.description('Address prefix for the secondary location.')
+param parSecondaryHubNetworkAddressPrefix string = '10.11.0.0/16'
 
 @sys.description('The name, IP address range, network security group, route table and delegation serviceName for each subnet in the virtual networks.')
 param parSubnets subnetOptionsType = [
@@ -81,8 +83,39 @@ param parSubnets subnetOptionsType = [
   }
 ]
 
+@sys.description('The name, IP address range, network security group, route table and delegation serviceName for subnet in the secondary virtual network.')
+param parSecondarySubnets subnetOptionsType = [
+  {
+    name: 'AzureBastionSubnet'
+    ipAddressRange: '10.11.15.0/24'
+    networkSecurityGroupId: ''
+    routeTableId: ''
+  }
+  {
+    name: 'GatewaySubnet'
+    ipAddressRange: '10.11.252.0/24'
+    networkSecurityGroupId: ''
+    routeTableId: ''
+  }
+  {
+    name: 'AzureFirewallSubnet'
+    ipAddressRange: '10.11.254.0/24'
+    networkSecurityGroupId: ''
+    routeTableId: ''
+  }
+  {
+    name: 'AzureFirewallManagementSubnet'
+    ipAddressRange: '10.11.253.0/24'
+    networkSecurityGroupId: ''
+    routeTableId: ''
+  }
+]
+
 @sys.description('Array of DNS Server IP addresses for VNet.')
 param parDnsServerIps array = []
+
+@sys.description('Array of DNS Server IP addresses for Secondary VNet.')
+param parSecondaryDnsServerIps array = []
 
 @sys.description('''Resource Lock Configuration for Virtual Network.
 
@@ -416,6 +449,11 @@ param parTelemetryOptOut bool = false
 @sys.description('Define outbound destination ports or ranges for SSH or RDP that you want to access from Azure Bastion.')
 param parBastionOutboundSshRdpPorts array = [ '22', '3389' ]
 
+var varLocations = [
+  parLocation
+  parSecondaryLocation
+]
+
 var varSubnetMap = map(range(0, length(parSubnets)), i => {
     name: parSubnets[i].name
     ipAddressRange: parSubnets[i].ipAddressRange
@@ -424,7 +462,41 @@ var varSubnetMap = map(range(0, length(parSubnets)), i => {
     delegation: parSubnets[i].?delegation ?? ''
   })
 
+var varSecondarySubnetMap = map(range(0, length(parSecondarySubnets)), i => {
+  name: parSecondarySubnets[i].name
+  ipAddressRange: parSecondarySubnets[i].ipAddressRange
+  networkSecurityGroupId: parSecondarySubnets[i].?networkSecurityGroupId ?? ''
+  routeTableId: parSecondarySubnets[i].?routeTableId ?? ''
+  delegation: parSecondarySubnets[i].?delegation ?? ''
+})
+
 var varSubnetProperties = [for subnet in varSubnetMap: {
+  name: subnet.name
+  properties: {
+    addressPrefix: subnet.ipAddressRange
+
+    delegations: (empty(subnet.delegation)) ? null : [
+      {
+        name: subnet.delegation
+        properties: {
+          serviceName: subnet.delegation
+        }
+      }
+    ]
+
+    networkSecurityGroup: (subnet.name == 'AzureBastionSubnet' && parAzBastionEnabled) ? {
+      id: '${resourceGroup().id}/providers/Microsoft.Network/networkSecurityGroups/${parAzBastionNsgName}'
+    } : (empty(subnet.networkSecurityGroupId)) ? null : {
+      id: subnet.networkSecurityGroupId
+    }
+
+    routeTable: (empty(subnet.routeTableId)) ? null : {
+      id: subnet.routeTableId
+    }
+  }
+}]
+
+var varSecondarySubnetProperties = [for subnet in varSecondarySubnetMap: {
   name: subnet.name
   properties: {
     addressPrefix: subnet.ipAddressRange
@@ -485,45 +557,41 @@ resource resDDoSProtectionPlanLock 'Microsoft.Authorization/locks@2020-05-01' = 
   }
 }
 
-resource resHubVnet 'Microsoft.Network/virtualNetworks@2023-02-01' = {
-  dependsOn: [
-    resBastionNsg
-  ]
-  name: parHubNetworkName
-  location: parLocation
+resource resHubVnets 'Microsoft.Network/virtualNetworks@2023-02-01' = [for i in range(0, length(varLocations)): {
+  name: '${parCompanyPrefix}-hub-${varLocations[i]}'
+  location: varLocations[i]
   tags: parTags
   properties: {
     addressSpace: {
       addressPrefixes: [
-        parHubNetworkAddressPrefix
+        varLocations[i] == parLocation ? parHubNetworkAddressPrefix : parSecondaryHubNetworkAddressPrefix
       ]
     }
     dhcpOptions: {
-      dnsServers: parDnsServerIps
+      dnsServers: varLocations[i] == parLocation ? parDnsServerIps : parSecondaryDnsServerIps
     }
-    subnets: varSubnetProperties
+    subnets: varLocations[i] == parLocation ? varSubnetProperties : varSecondarySubnetProperties
     enableDdosProtection: parDdosEnabled
     ddosProtectionPlan: (parDdosEnabled) ? {
       id: resDdosProtectionPlan.id
     } : null
   }
-}
+}]
 
-// Create a virtual network resource lock if parGlobalResourceLock.kind != 'None' or if parVirtualNetworkLock.kind != 'None'
-resource resVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = if (parVirtualNetworkLock.kind != 'None' || parGlobalResourceLock.kind != 'None') {
-  scope: resHubVnet
-  name: parVirtualNetworkLock.?name ?? '${resHubVnet.name}-lock'
+resource resVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = [for i in range(0, length(varLocations)): if (parVirtualNetworkLock.kind != 'None' || parGlobalResourceLock.kind != 'None') {
+  scope: resHubVnets[i]
+  name: parVirtualNetworkLock.?name ?? '${parCompanyPrefix}-hub-${varLocations[i]}-lock'
   properties: {
     level: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.kind : parVirtualNetworkLock.kind
-    notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.?notes : parVirtualNetworkLock.?notes
+    notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.notes : parVirtualNetworkLock.notes
   }
-}
+}]
 
-module modBastionPublicIp '../publicIp/publicIp.bicep' = if (parAzBastionEnabled) {
-  name: 'deploy-Bastion-Public-IP'
+module modBastionPublicIp '../publicIp/publicIp.bicep' = [for i in range(0, length(varLocations)): if (parAzBastionEnabled) {
+  name: 'deploy-Bastion-Public-IP-${varLocations[i]}'
   params: {
-    parLocation: parLocation
-    parPublicIpName: '${parPublicIpPrefix}${parAzBastionName}${parPublicIpSuffix}'
+    parLocation: varLocations[i]
+    parPublicIpName: '${parPublicIpPrefix}${parAzBastionName}-${varLocations[i]}${parPublicIpSuffix}'
     parPublicIpSku: {
       name: parPublicIpSku
     }
@@ -535,16 +603,16 @@ module modBastionPublicIp '../publicIp/publicIp.bicep' = if (parAzBastionEnabled
     parTags: parTags
     parTelemetryOptOut: parTelemetryOptOut
   }
-}
+}]
 
-resource resBastionSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = if (parAzBastionEnabled) {
-  parent: resHubVnet
+resource resBastionSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = [for i in range(0, length(varLocations)): if (parAzBastionEnabled) {
+  parent: resHubVnets[i]  // Reference the corresponding VNet for the location
   name: 'AzureBastionSubnet'
-}
+}]
 
-resource resBastionNsg 'Microsoft.Network/networkSecurityGroups@2023-02-01' = if (parAzBastionEnabled) {
-  name: parAzBastionNsgName
-  location: parLocation
+resource resBastionNsg 'Microsoft.Network/networkSecurityGroups@2023-02-01' = [for i in range(0, length(varLocations)): if (parAzBastionEnabled) {
+  name: '${parAzBastionNsgName}-${varLocations[i]}'
+  location: varLocations[i]
   tags: parTags
 
   properties: {
@@ -616,7 +684,7 @@ resource resBastionNsg 'Microsoft.Network/networkSecurityGroups@2023-02-01' = if
           protocol: '*'
           sourcePortRange: '*'
           destinationPortRange: '*'
-        }
+  }
       }
       // Outbound Rules
       {
@@ -820,15 +888,16 @@ resource resVirtualNetworkGatewayLock 'Microsoft.Authorization/locks@2020-05-01'
   }
 }]
 
-resource resAzureFirewallSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = if (parAzFirewallEnabled) {
-  parent: resHubVnet
+resource resAzureFirewallSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = [for i in range(0, length(varLocations)): if (parAzFirewallEnabled) {
+  parent: resHubVnets[i]
   name: 'AzureFirewallSubnet'
-}
+}]
 
-resource resAzureFirewallMgmtSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = if (parAzFirewallEnabled && (contains(map(parSubnets, subnets => subnets.name), 'AzureFirewallManagementSubnet'))) {
-  parent: resHubVnet
+
+resource resAzureFirewallMgmtSubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = [for i in range(0, length(varLocations)): if (parAzFirewallEnabled && contains(parSubnets, 'AzureFirewallManagementSubnet')) {
+  parent: resHubVnets[i]  // Refer to the virtual network in the respective location
   name: 'AzureFirewallManagementSubnet'
-}
+}]
 
 module modAzureFirewallPublicIp '../publicIp/publicIp.bicep' = if (parAzFirewallEnabled) {
   name: 'deploy-Firewall-Public-IP'
