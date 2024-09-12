@@ -641,6 +641,19 @@
             }
           ]
         },
+        "SecondaryLocation":{
+          "source": "input",
+          "type": "string",
+          "description": "Secondary deployment location. (e.g 'westeurope')",
+          "Value": "",
+          "Targets": [
+            {
+              "File": "hubNetworking.parameters.az.secondaryRegion.all.json",
+              "Name": "parSecondaryLocation.value",
+              "Destination": "Parameters"
+            }
+          ]
+        },
         "AvailabilityZones": {
           "source": "powershell",
           "type": "list(string)",
