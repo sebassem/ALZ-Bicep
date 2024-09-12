@@ -587,7 +587,7 @@ resource resVirtualNetworkLock 'Microsoft.Authorization/locks@2020-05-01' = [for
   }
 }]
 
-module modBastionPublicIp '../publicIp/publicIp.bicep' = [for i in range(0, length(varLocations)): if (parAzBastionEnabled) {
+module modBastionPublicIp '../../infra-as-code/bicep/modules/publicIp/publicIp.bicep' = [for i in range(0, length(varLocations)): if (parAzBastionEnabled) {
   name: 'deploy-Bastion-Public-IP-${varLocations[i]}'
   params: {
     parLocation: varLocations[i]
@@ -757,22 +757,21 @@ resource resBastionNsg 'Microsoft.Network/networkSecurityGroups@2023-02-01' = [f
       }
     ]
   }
-}
-
+}]
 // Create bastion nsg resource lock if parAzBastionEnbled is true and parGlobalResourceLock.kind != 'None' or if parBastionLock.kind != 'None'
-resource resBastionNsgLock 'Microsoft.Authorization/locks@2020-05-01' = if (parAzBastionEnabled && (parBastionLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
-  scope: resBastionNsg
-  name: parBastionLock.?name ?? '${resBastionNsg.name}-lock'
+resource resBastionNsgLock 'Microsoft.Authorization/locks@2020-05-01' = [for i in range(0, length(varLocations)) :if (parAzBastionEnabled && (parBastionLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
+  scope: resBastionNsg[i]
+  name: parBastionLock.?name ?? '${resBastionNsg[i].name}-lock'
   properties: {
     level: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.kind : parBastionLock.kind
     notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.?notes : parBastionLock.?notes
   }
-}
+}]
 
 // AzureBastionSubnet is required to deploy Bastion service. This subnet must exist in the parsubnets array if you enable Bastion Service.
 // There is a minimum subnet requirement of /27 prefix.
 // If you are deploying standard this needs to be larger. https://docs.microsoft.com/en-us/azure/bastion/configuration-settings#subnet
-resource resBastion 'Microsoft.Network/bastionHosts@2023-02-01' = if (parAzBastionEnabled) {
+resource resBastion 'Microsoft.Network/bastionHosts@2023-02-01' = [for i in range(0, length(varLocations)) :if (parAzBastionEnabled) {
   location: parLocation
   name: parAzBastionName
   tags: parTags
@@ -787,33 +786,33 @@ resource resBastion 'Microsoft.Network/bastionHosts@2023-02-01' = if (parAzBasti
         name: 'IpConf'
         properties: {
           subnet: {
-            id: resBastionSubnetRef.id
+            id: resBastionSubnetRef[i].id
           }
           publicIPAddress: {
-            id: parAzBastionEnabled ? modBastionPublicIp.outputs.outPublicIpId : ''
+            id: parAzBastionEnabled ? modBastionPublicIp[i].outputs.outPublicIpId : ''
           }
         }
       }
     ]
   }
-}
+}]
 
 // Create Bastion resource lock if parAzBastionEnabled is true and parGlobalResourceLock.kind != 'None' or if parBastionLock.kind != 'None'
-resource resBastionLock 'Microsoft.Authorization/locks@2020-05-01' = if (parAzBastionEnabled && (parBastionLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
-  scope: resBastion
-  name: parBastionLock.?name ?? '${resBastion.name}-lock'
+resource resBastionLock 'Microsoft.Authorization/locks@2020-05-01' = [for i in range(0, length(varLocations)) :if (parAzBastionEnabled && (parBastionLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
+  scope: resBastion[i]
+  name: parBastionLock.?name ?? '${resBastion[i].name}-lock'
   properties: {
     level: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.kind : parBastionLock.kind
     notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.?notes : parBastionLock.?notes
   }
-}
+}]
 
-resource resGatewaySubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = if (parVpnGatewayEnabled || parExpressRouteGatewayEnabled ) {
-  parent: resHubVnet
+resource resGatewaySubnetRef 'Microsoft.Network/virtualNetworks/subnets@2023-02-01' existing = [for i in range(0, length(varLocations)): if (parVpnGatewayEnabled || parExpressRouteGatewayEnabled ) {
+  parent: resHubVnets[i]
   name: 'GatewaySubnet'
-}
+}]
 
-module modGatewayPublicIp '../publicIp/publicIp.bicep' = [for (gateway, i) in varGwConfig: if ((gateway.name != 'noconfigVpn') && (gateway.name != 'noconfigEr')) {
+module modGatewayPublicIp '../../infra-as-code/bicep/modules/publicIp/publicIp.bicep' = [for (gateway, i) in varGwConfig: if ((gateway.name != 'noconfigVpn') && (gateway.name != 'noconfigEr')) {
   name: 'deploy-Gateway-Public-IP-${i}'
   params: {
     parLocation: parLocation
@@ -863,14 +862,14 @@ resource resGateway 'Microsoft.Network/virtualNetworkGateways@2023-02-01' = [for
     } : null
     ipConfigurations: [
       {
-        id: resHubVnet.id
+        id: resHubVnets[i].id
         name: 'vnetGatewayConfig'
         properties: {
           publicIPAddress: {
             id: (((gateway.name != 'noconfigVpn') && (gateway.name != 'noconfigEr')) ? modGatewayPublicIp[i].outputs.outPublicIpId : 'na')
           }
           subnet: {
-            id: resGatewaySubnetRef.id
+            id: resGatewaySubnetRef[i].id
           }
         }
       }
@@ -899,7 +898,7 @@ resource resAzureFirewallMgmtSubnetRef 'Microsoft.Network/virtualNetworks/subnet
   name: 'AzureFirewallManagementSubnet'
 }]
 
-module modAzureFirewallPublicIp '../publicIp/publicIp.bicep' = if (parAzFirewallEnabled) {
+module modAzureFirewallPublicIp '../../infra-as-code/bicep/modules/publicIp/publicIp.bicep' = if (parAzFirewallEnabled) {
   name: 'deploy-Firewall-Public-IP'
   params: {
     parLocation: parLocation
@@ -918,7 +917,7 @@ module modAzureFirewallPublicIp '../publicIp/publicIp.bicep' = if (parAzFirewall
   }
 }
 
-module modAzureFirewallMgmtPublicIp '../publicIp/publicIp.bicep' = if (parAzFirewallEnabled && (contains(map(parSubnets, subnets => subnets.name), 'AzureFirewallManagementSubnet'))) {
+module modAzureFirewallMgmtPublicIp '../../infra-as-code/bicep/modules/publicIp/publicIp.bicep' = if (parAzFirewallEnabled && (contains(map(parSubnets, subnets => subnets.name), 'AzureFirewallManagementSubnet'))) {
   name: 'deploy-Firewall-mgmt-Public-IP'
   params: {
     parLocation: parLocation
@@ -976,23 +975,22 @@ resource resFirewallPoliciesLock 'Microsoft.Authorization/locks@2020-05-01' = if
 
 // AzureFirewallSubnet is required to deploy Azure Firewall . This subnet must exist in the parsubnets array if you deploy.
 // There is a minimum subnet requirement of /26 prefix.
-resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (parAzFirewallEnabled) {
+resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = [for i in range(0, length(varLocations)): if (parAzFirewallEnabled) {
   dependsOn: [
     resGateway
   ]
-  name: parAzFirewallName
+  name: 'parAzFirewallName-${varLocations[i]}'
   location: parLocation
   tags: parTags
   zones: (!empty(parAzFirewallAvailabilityZones) ? parAzFirewallAvailabilityZones : [])
   properties: parAzFirewallTier == 'Basic' ? {
     ipConfigurations: varAzFirewallUseCustomPublicIps
-     ? map(parAzFirewallCustomPublicIps, ip =>
-       {
+     ? map(parAzFirewallCustomPublicIps, ip => {
         name: 'ipconfig${uniqueString(ip)}'
         properties: ip == parAzFirewallCustomPublicIps[0]
          ? {
           subnet: {
-            id: resAzureFirewallSubnetRef.id
+            id: resAzureFirewallSubnetRef[i].id
           }
           publicIPAddress: {
             id: parAzFirewallEnabled ? ip : ''
@@ -1009,7 +1007,7 @@ resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (pa
         name: 'ipconfig1'
         properties: {
           subnet: {
-            id: resAzureFirewallSubnetRef.id
+            id: resAzureFirewallSubnetRef[i].id
           }
           publicIPAddress: {
             id: parAzFirewallEnabled ? modAzureFirewallPublicIp.outputs.outPublicIpId : ''
@@ -1024,7 +1022,7 @@ resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (pa
           id: parAzFirewallEnabled ? modAzureFirewallMgmtPublicIp.outputs.outPublicIpId : ''
         }
         subnet: {
-          id: resAzureFirewallMgmtSubnetRef.id
+          id: resAzureFirewallMgmtSubnetRef[i].id
         }
       }
     }
@@ -1043,7 +1041,7 @@ resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (pa
         properties: ip == parAzFirewallCustomPublicIps[0]
          ? {
           subnet: {
-            id: resAzureFirewallSubnetRef.id
+            id: resAzureFirewallSubnetRef[i].id
           }
           publicIPAddress: {
             id: parAzFirewallEnabled ? ip : ''
@@ -1060,7 +1058,7 @@ resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (pa
         name: 'ipconfig1'
         properties: {
           subnet: {
-            id: resAzureFirewallSubnetRef.id
+            id: resAzureFirewallSubnetRef[i].id
           }
           publicIPAddress: {
             id: parAzFirewallEnabled ? modAzureFirewallPublicIp.outputs.outPublicIpId : ''
@@ -1076,20 +1074,20 @@ resource resAzureFirewall 'Microsoft.Network/azureFirewalls@2023-02-01' = if (pa
       id: resFirewallPolicies.id
     }
   }
-}
+}]
 
 // Create Azure Firewall resource lock if parAzFirewallEnabled is true and parGlobalResourceLock.kind != 'None' or if parAzureFirewallLock.kind != 'None'
-resource resAzureFirewallLock 'Microsoft.Authorization/locks@2020-05-01' = if (parAzFirewallEnabled && (parAzureFirewallLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
-  scope: resAzureFirewall
-  name: parAzureFirewallLock.?name ?? '${resAzureFirewall.name}-lock'
+resource resAzureFirewallLock 'Microsoft.Authorization/locks@2020-05-01' =  [for i in range(0, length(varLocations)): if (parAzFirewallEnabled && (parAzureFirewallLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
+  scope: resAzureFirewall[i]
+  name: parAzureFirewallLock.?name ?? '${resAzureFirewall[i].name}-lock'
   properties: {
     level: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.kind : parAzureFirewallLock.kind
     notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.?notes : parAzureFirewallLock.?notes
   }
-}
+}]
 
 //If Azure Firewall is enabled we will deploy a RouteTable to redirect Traffic to the Firewall.
-resource resHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if (parAzFirewallEnabled) {
+resource resHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = [for i in range(0, length(varLocations)): if (parAzFirewallEnabled) {
   name: parHubRouteTableName
   location: parLocation
   tags: parTags
@@ -1100,65 +1098,89 @@ resource resHubRouteTable 'Microsoft.Network/routeTables@2023-02-01' = if (parAz
         properties: {
           addressPrefix: '0.0.0.0/0'
           nextHopType: 'VirtualAppliance'
-          nextHopIpAddress: parAzFirewallEnabled ? resAzureFirewall.properties.ipConfigurations[0].properties.privateIPAddress : ''
+          nextHopIpAddress: parAzFirewallEnabled ? resAzureFirewall[i].properties.ipConfigurations[0].properties.privateIPAddress : ''
         }
       }
     ]
     disableBgpRoutePropagation: parDisableBgpRoutePropagation
   }
-}
+}]
 
 // Create a Route Table if parAzFirewallEnabled is true and parGlobalResourceLock.kind != 'None' or if parHubRouteTableLock.kind != 'None'
-resource resHubRouteTableLock 'Microsoft.Authorization/locks@2020-05-01' = if (parAzFirewallEnabled && (parHubRouteTableLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
-  scope: resHubRouteTable
-  name: parHubRouteTableLock.?name ?? '${resHubRouteTable.name}-lock'
+resource resHubRouteTableLock 'Microsoft.Authorization/locks@2020-05-01' = [for i in range(0, length(varLocations)): if (parAzFirewallEnabled && (parHubRouteTableLock.kind != 'None' || parGlobalResourceLock.kind != 'None')) {
+  scope: resHubRouteTable[i]
+  name: parHubRouteTableLock.?name ?? '${resHubRouteTable[i].name}-lock'
   properties: {
     level: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.kind : parHubRouteTableLock.kind
     notes: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock.?notes : parHubRouteTableLock.?notes
   }
-}
+}]
 
-module modPrivateDnsZones '../privateDnsZones/privateDnsZones.bicep' = if (parPrivateDnsZonesEnabled) {
+module modPrivateDnsZones '../../infra-as-code/bicep/modules/privateDnsZones/privateDnsZones.bicep' = [for i in range(0, length(varLocations)):if (parPrivateDnsZonesEnabled) {
   name: 'deploy-Private-DNS-Zones'
   scope: resourceGroup(parPrivateDnsZonesResourceGroup)
   params: {
     parLocation: parLocation
     parTags: parTags
-    parVirtualNetworkIdToLink: resHubVnet.id
+    parVirtualNetworkIdToLink: resHubVnets[i].id
     parVirtualNetworkIdToLinkFailover: parVirtualNetworkIdToLinkFailover
     parPrivateDnsZones: parPrivateDnsZones
     parPrivateDnsZoneAutoMergeAzureBackupZone: parPrivateDnsZoneAutoMergeAzureBackupZone
     parResourceLockConfig: (parGlobalResourceLock.kind != 'None') ? parGlobalResourceLock : parPrivateDNSZonesLock
     parTelemetryOptOut: parTelemetryOptOut
   }
-}
+}]
 
 // Optional Deployments for Customer Usage Attribution
-module modCustomerUsageAttribution '../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
+module modCustomerUsageAttribution '../../infra-as-code/bicep/CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut) {
   #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
   name: 'pid-${varCuaid}-${uniqueString(resourceGroup().location)}'
   params: {}
 }
 
-module modCustomerUsageAttributionZtnP1 '../../CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut && varZtnP1Trigger) {
+module modCustomerUsageAttributionZtnP1 '../../infra-as-code/bicep/CRML/customerUsageAttribution/cuaIdResourceGroup.bicep' = if (!parTelemetryOptOut && varZtnP1Trigger) {
   #disable-next-line no-loc-expr-outside-params //Only to ensure telemetry data is stored in same location as deployment. See https://github.com/Azure/ALZ-Bicep/wiki/FAQ#why-are-some-linter-rules-disabled-via-the-disable-next-line-bicep-function for more information
   name: 'pid-${varZtnP1CuaId}-${uniqueString(resourceGroup().location)}'
   params: {}
 }
 
 //If Azure Firewall is enabled we will deploy a RouteTable to redirect Traffic to the Firewall.
-output outAzFirewallPrivateIp string = parAzFirewallEnabled ? resAzureFirewall.properties.ipConfigurations[0].properties.privateIPAddress : ''
+output outAzFirewallPrivateIp array = [for i in range(0, length(varLocations)):{
+  AzFirewallName: parAzFirewallEnabled ? resAzureFirewall[i].name : ''
+  AzFirewallEnabled: parAzFirewallEnabled ? resAzureFirewall[i].properties.ipConfigurations[0].properties.privateIPAddress : ''
+}]
 
 //If Azure Firewall is enabled we will deploy a RouteTable to redirect Traffic to the Firewall.
-output outAzFirewallName string = parAzFirewallEnabled ? parAzFirewallName : ''
-
-output outPrivateDnsZones array = (parPrivateDnsZonesEnabled ? modPrivateDnsZones.outputs.outPrivateDnsZones : [])
-output outPrivateDnsZonesNames array = (parPrivateDnsZonesEnabled ? modPrivateDnsZones.outputs.outPrivateDnsZonesNames : [])
+output outAzFirewallName array = [for i in range(0, length(varLocations)): {
+  AzFirewallName: parAzFirewallEnabled ? resAzureFirewall[i].name : ''
+}
+]
+output outPrivateDnsZones array = [for i in range(0, length(varLocations)): {
+  PrivateDnsZones: parPrivateDnsZonesEnabled ? modPrivateDnsZones[i].outputs.outPrivateDnsZones : ''
+}]
+output outPrivateDnsZones2 array = [for i in range(0, length(varLocations)): {
+  PrivateDnsZones: parPrivateDnsZonesEnabled ? modPrivateDnsZones[i].outputs.outPrivateDnsZones : ''
+}]
+output outPrivateDnsZonesNames array = [for i in range(0, length(varLocations)): {
+  PrivateDnsZonesNames: parPrivateDnsZonesEnabled ? modPrivateDnsZones[i].outputs.outPrivateDnsZonesNames : ''
+}]
 
 output outDdosPlanResourceId string = resDdosProtectionPlan.id
-output outHubVirtualNetworkName string = resHubVnet.name
-output outHubVirtualNetworkId string = resHubVnet.id
-output outHubRouteTableId string = parAzFirewallEnabled ? resHubRouteTable.id : ''
-output outHubRouteTableName string = parAzFirewallEnabled ? resHubRouteTable.name : ''
-output outBastionNsgId string = parAzBastionEnabled ? resBastionNsg.id : ''
-output outBastionNsgName string = parAzBastionEnabled ? resBastionNsg.name : ''
+output outHubVirtualNetworkName array = [for i in range(0, length(varLocations)): {
+  HubVirtualNetworkName: resHubVnets[i].name
+}]
+output outHubVirtualNetworkId array = [for i in range(0, length(varLocations)): {
+  HubVirtualNetworkId: resHubVnets[i].id
+}]
+output outHubRouteTableId array = [for i in range(0, length(varLocations)): {
+  HubRouteTableId: parAzFirewallEnabled ? resHubRouteTable[i].id : ''
+}]
+output outHubRouteTableName array = [for i in range(0, length(varLocations)): {
+  HubRouteTableName: parAzFirewallEnabled ? resHubRouteTable[i].name : ''
+}]
+output outBastionNsgId array = [for i in range(0, length(varLocations)): {
+  BastionNsgId: parAzBastionEnabled ? resBastionNsg[i].id : ''
+}]
+output outBastionNsgName array = [for i in range(0, length(varLocations)): {
+  BastionNsgName: parAzBastionEnabled ? resBastionNsg[i].name : ''
+}]
